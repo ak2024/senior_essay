@@ -1,0 +1,189 @@
+---
+title: "Thesis Support"
+author: "Adia Keene"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(fs)
+library(plotly)
+library(sf)
+library(alarmdata)
+library(tigris)
+library(ggredist)
+setwd("/Users/adiakeene/Library/CloudStorage/Box-Box/Senior Thesis/Code")
+options(tigris_use_cache = TRUE)
+```
+
+## Processing in Credit Card Data
+
+```{r read,include=FALSE}
+filename <- "as_txn_agg_2018_2022_weekly_Tue.csv"
+dir <- "/Users/adiakeene/Library/CloudStorage/Box-Box/Senior Thesis/Code/"
+dat <- read_csv(path(dir, filename), col_names = FALSE)
+names(dat) <- c("year","week","zip","ind","amt","num")
+```
+
+```{r display1}
+head(dat)
+```
+
+* year: year
+* week: week of the year, starting on the first Tuesday
+* zip: zip code
+* ind: industry
+* amt: amount spent
+* num: number of transactions
+
+### Creating Industry Groupings
+
+```{r grouping}
+unique(dat$ind)
+ind_ref <- read_csv("ind_ref.csv")
+cc_data_grouped <- left_join(dat,ind_ref,by=c("ind")) %>% 
+  group_by(grouping, zip, year, week) %>% 
+  summarize(total_amt = sum(amt), total_num = sum(num))
+head(cc_data_grouped)
+```
+
+### Some Exploratory Graphs on CC Data Alone
+
+```{r display2}
+zip_choice <- sample(dat$zip,1)
+
+# graphing the different groupings in one zip code in 2022
+cc_data_grouped %>% 
+  filter(zip == zip_choice, year == 2022) %>% 
+  ggplot(aes(x = week, y = total_amt, col = grouping)) +
+  geom_line() +
+  scale_color_discrete(labels = c("Apparel", "Restaurants and Bars", "Groceries",
+                       "Home & Auto Purchases", "Home & Auto Upkeep",
+                       "Misc", "Rec Activities", "Rec Merchandise",
+                       "General Retail", "Services", "Technology",
+                       "Transportation/Travel")) +
+  ggtitle(paste("Spending by Industry in 2022 in Zip Code #",zip_choice))+
+  xlab("Week") +
+  ylab("Amount Spent, USD") +
+  labs(col = "Spending Category")
+```
+
+## Presidential Vote Data
+
+### Prof Kuriwaki's Code for the 2020 Election with Slight Alterations
+
+```{r preselection}
+# presidential election 2020
+make_demshare <- function(tbl) {
+  tbl |>
+    mutate(demshare_pre20 = pre_20_dem_bid / (pre_20_dem_bid + pre_20_rep_tru), 
+           demshare_pre16 = pre_16_dem_cli/(pre_16_dem_cli + pre_16_rep_tru), delta_demshare_pre20 = demshare_pre20 - demshare_pre16)
+}
+
+prec_shp_ct <- alarm_50state_map("CT") |> make_demshare()
+prec_shp_ny <- alarm_50state_map("NY") |> make_demshare()
+prec_shp_nj <- alarm_50state_map("NJ") |> make_demshare()
+
+zcta_ct <- zctas(state = "CT", year = 2010)
+zcta_ny <- zctas(state = "NY", year = 2010)
+zcta_nj <- zctas(state = "NJ", year = 2010)
+
+# function for map
+make_map <- function(prec, zcta) {
+  ggplot(prec) +
+    geom_sf(aes(fill = demshare_pre20), color = "transparent") +
+    scale_fill_party_c()  +
+    geom_sf(data = zcta, fill = "transparent") +
+    theme_map()
+}
+
+# run functions
+#make_map(prec_shp_ct, zcta_ct)
+#make_map(prec_shp_ny, zcta_ny)
+#make_map(prec_shp_nj, zcta_nj) +
+  #labs(title = "ZCTAs (black lines) and precincts (filled polygons)")
+```
+## Aggregating Down Credit Card Data (NY)
+
+```{r aggregate}
+library(geomander)
+library(tinytiger)
+
+# estimating down spending changes in the last 5 weeks -- estimate_up() is imprecise
+  # the weeks can be changed in the mutate() line
+ny_spending_changes <- cc_data_grouped %>% 
+  filter(year == 2020, zip %in% zcta_ny$ZCTA5CE10) %>% 
+  group_by(grouping, zip) %>% 
+  mutate(delta5 = total_amt - lag(total_amt, n = 5L)) %>%
+  filter(week == 44) %>% 
+  pivot_wider(names_from = grouping, values_from = delta5, 
+              id_cols = zip)
+
+zcta_ny <- left_join(zcta_ny, ny_spending_changes, by = c("ZCTA5CE10" ="zip"))
+
+# match key to be used for all industries
+
+# apparel
+prec_shp_ny$apparel_plus <- geo_estimate_down(from = zcta_ny, to = prec_shp_ny, wts = prec_shp_ny$pop, value = zcta_ny$apparel_plus, method = 'centroid')
+# food and drink (restaurants and bars)
+prec_shp_ny$food_and_drink <- geo_estimate_down(from = zcta_ny, to = prec_shp_ny, wts = prec_shp_ny$pop, value = zcta_ny$food_and_drink, method = 'centroid')
+# groceries
+prec_shp_ny$grocery_plus <- geo_estimate_down(from = zcta_ny, to = prec_shp_ny, wts = prec_shp_ny$pop, value = zcta_ny$grocery_plus, method = 'centroid')
+# home and auto purchases
+prec_shp_ny$homeauto_purchases <- geo_estimate_down(from = zcta_ny, to = prec_shp_ny, wts = prec_shp_ny$pop, value = zcta_ny$homeauto_purchases, method = 'centroid')
+# home and auto upkeep
+prec_shp_ny$homeauto_upkeep <- geo_estimate_down(from = zcta_ny, to = prec_shp_ny, wts = prec_shp_ny$pop, value = zcta_ny$homeauto_upkeep, method = 'centroid')
+# misc
+prec_shp_ny$misc <- geo_estimate_down(from = zcta_ny, to = prec_shp_ny, wts = prec_shp_ny$pop, value = zcta_ny$misc, method = 'centroid')
+# recreational activities
+prec_shp_ny$rec_activities <- geo_estimate_down(from = zcta_ny, to = prec_shp_ny, wts = prec_shp_ny$pop, value = zcta_ny$rec_activities, method = 'centroid')
+# recreational merchandise
+prec_shp_ny$rec_merchandise <- geo_estimate_down(from = zcta_ny, to = prec_shp_ny, wts = prec_shp_ny$pop, value = zcta_ny$rec_merchandise, method = 'centroid')
+# general retail
+prec_shp_ny$retail_gen <- geo_estimate_down(from = zcta_ny, to = prec_shp_ny, wts = prec_shp_ny$pop, value = zcta_ny$retail_gen, method = 'centroid')
+# services
+prec_shp_ny$services <- geo_estimate_down(from = zcta_ny, to = prec_shp_ny, wts = prec_shp_ny$pop, value = zcta_ny$services, method = 'centroid')
+# tech
+prec_shp_ny$tech <- geo_estimate_down(from = zcta_ny, to = prec_shp_ny, wts = prec_shp_ny$pop, value = zcta_ny$tech, method = 'centroid')
+# transportation and travel
+prec_shp_ny$transportation_travel <- geo_estimate_down(from = zcta_ny, to = prec_shp_ny, wts = prec_shp_ny$pop, value = zcta_ny$transportation_travel, method = 'centroid')
+```
+
+```{r stepwise_regression}
+# Including all spending categories except misc
+fit1 <- summary(lm(data = prec_shp_ny, delta_demshare_pre20 ~ apparel_plus +
+             food_and_drink + grocery_plus + homeauto_purchases +
+             homeauto_upkeep + rec_activities + rec_merchandise + retail_gen + services + tech + transportation_travel))
+
+# remove rec_merchandise
+summary(lm(data = prec_shp_ny, delta_demshare_pre20 ~ apparel_plus +
+             food_and_drink + grocery_plus + homeauto_purchases +
+             homeauto_upkeep + rec_activities + retail_gen + services + tech + transportation_travel))
+
+# remove rec_activities
+summary(lm(data = prec_shp_ny, delta_demshare_pre20 ~ apparel_plus +
+             food_and_drink + grocery_plus + homeauto_purchases +
+             homeauto_upkeep + retail_gen + services + transportation_travel))
+
+# removing grocery_plus
+summary(lm(data = prec_shp_ny, delta_demshare_pre20 ~ apparel_plus +
+             food_and_drink + homeauto_purchases +
+             homeauto_upkeep + retail_gen + services + transportation_travel))
+
+# final model removing services
+final_fit <- lm(data = prec_shp_ny, delta_demshare_pre20 ~ 
+                          apparel_plus + food_and_drink + homeauto_purchases +
+                          homeauto_upkeep + retail_gen +
+                          transportation_travel)
+summary(final_fit)
+```
+
+
+```{r graph}
+library(car)
+qqPlot(final_fit, main = "Normal Q-Q Plot for the Final Regression Model")
+hist(final_fit$residuals, breaks = 100, main = "Residuals for the 2020 Presidential Election Model, NY", xlab = "Residuals")
+```
